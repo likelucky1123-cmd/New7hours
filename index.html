@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>7小時</title>
+  <title>7小時 - 記帳與許願</title>
   
   <link rel="icon" href="IMG_2669.jpeg">
   <link rel="apple-touch-icon" href="IMG_2669.jpeg">
@@ -35,7 +35,7 @@
 
   <script type="text/babel">
     // =========================================================================
-    // ✅ 你的 Firebase 專屬金鑰
+    // ✅ Firebase 專屬金鑰
     // =========================================================================
     const firebaseConfig = {
       apiKey: "AIzaSyDKVLVYRGvsiuFmQIXuFCU9O2TBVVRb3gk",
@@ -55,14 +55,13 @@
     const db = firebase.firestore();
     const appId = 'tnt-richrichboomboom';
 
-    // 🚀 【黑科技開啟】啟動 Firestore 離線持久化緩存機制！
-    // 即使雲端沒存成功，也會先強制存在手機/電腦本地，下次有網路再同步！
+    // 啟動 Firestore 離線持久化緩存機制
     db.enablePersistence({ synchronizeTabs: true })
       .catch(function(err) {
         console.warn("離線持久化啟動失敗:", err);
       });
       
-    // 強制設定為本地持久登入，避免瀏覽器隨便把帳號登出
+    // 強制設定為本地持久登入
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
 
     const { useState, useEffect, useRef } = React;
@@ -74,17 +73,27 @@
       const [authLoading, setAuthLoading] = useState(true);
       const [items, setItems] = useState([]); 
       const [funds, setFunds] = useState([]); 
+      const [wishes, setWishes] = useState([]); 
       const [profileData, setProfileData] = useState({ nickname: '', fandom: '', bio: '努力為愛發電，聰明控制預算！', avatar: null, dashboardBg: null });
       
       // UI 控制
       const [activeCategory, setActiveCategory] = useState('全部');
+      const [activeWishCategory, setActiveWishCategory] = useState('全部'); 
       const [swipedItemId, setSwipedItemId] = useState(null);
+      const [swipedWishId, setSwipedWishId] = useState(null); 
       const [touchStartX, setTouchStartX] = useState(0);
+      
+      // Modal 控制
       const [isModalOpen, setIsModalOpen] = useState(false); 
-      const [editingId, setEditingId] = useState(null); 
       const [isProfileOpen, setIsProfileOpen] = useState(false); 
       const [isFundModalOpen, setIsFundModalOpen] = useState(false); 
       const [isFundHistoryOpen, setIsFundHistoryOpen] = useState(false); 
+      const [isWishlistOpen, setIsWishlistOpen] = useState(false); 
+      const [isWishModalOpen, setIsWishModalOpen] = useState(false); 
+      
+      const [editingId, setEditingId] = useState(null); 
+      const [editingWishId, setEditingWishId] = useState(null); 
+      
       const [isLoading, setIsLoading] = useState(false);
       const [isSavingProfile, setIsSavingProfile] = useState(false);
       
@@ -101,6 +110,7 @@
       const todayStr = new Date().toISOString().split('T')[0];
       const [newItem, setNewItem] = useState({ name: '', price: '', date: todayStr, image: null, category: '小卡' });
       const [newFund, setNewFund] = useState({ amount: '', reason: '', date: todayStr });
+      const [newWish, setNewWish] = useState({ name: '', price: '', date: todayStr, image: null, category: '小卡' }); 
 
       const showToast = (msg, type = 'success') => {
         setToastMessage(msg);
@@ -117,10 +127,10 @@
         return () => unsubscribe();
       }, []);
 
-      // === 2. 獲取資料 (現在會優先從本地快取讀取，光速顯示) ===
+      // === 2. 獲取資料 ===
       useEffect(() => {
         if (!user) {
-          setItems([]); setFunds([]); return;
+          setItems([]); setFunds([]); setWishes([]); return;
         }
 
         // 讀取個人設定
@@ -152,14 +162,18 @@
             const fetchedItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             fetchedItems.sort(safeSort);
             setItems(fetchedItems);
-            
-            // 提示資料來源是否為快取
-            if (snapshot.metadata.fromCache && fetchedItems.length > 0) {
-                // 如果是從快取讀取的，代表正處於離線狀態，但不影響使用者看到資料
-            }
         }, (error) => {
           console.error("讀取戰利品失敗:", error);
-          showToast('資料同步異常，但仍可離線使用', 'error');
+        });
+
+        // 即時讀取許願池
+        const wishesRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('wishes');
+        const unsubscribeWishes = wishesRef.onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+            const fetchedWishes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            fetchedWishes.sort(safeSort);
+            setWishes(fetchedWishes);
+        }, (error) => {
+          console.error("讀取許願池失敗:", error);
         });
 
         // 即時讀取基金
@@ -170,14 +184,13 @@
             setFunds(fetchedFunds);
         }, (error) => console.error("讀取基金失敗:", error));
 
-        return () => { unsubscribeItems(); unsubscribeFunds(); };
+        return () => { unsubscribeItems(); unsubscribeFunds(); unsubscribeWishes(); };
       }, [user]);
 
       // === 登入/註冊流程 ===
       const handleAuthSubmit = async (e) => {
         e.preventDefault();
         setAuthError(''); setIsAuthProcessing(true);
-
         try {
           if (!isLoginMode) {
             if (authForm.password !== authForm.confirmPassword) {
@@ -198,9 +211,7 @@
             case 'auth/weak-password': setAuthError('密碼太短，至少需 6 個字元！'); break;
             default: setAuthError('連線錯誤，請稍後再試。');
           }
-        } finally { 
-          setIsAuthProcessing(false); 
-        }
+        } finally { setIsAuthProcessing(false); }
       };
 
       const handleLogout = async () => {
@@ -208,6 +219,7 @@
           await auth.signOut();
           setAuthForm({ email: user?.email || '', password: '', confirmPassword: '' });
           setIsProfileOpen(false);
+          setIsWishlistOpen(false);
           showToast('已安全登出');
         } catch(e) { console.error(e); }
       };
@@ -236,40 +248,30 @@
       const handleAvatarUpload = (e) => processImage(e.target.files[0], 200, (dataUrl) => setProfileData(p => ({...(p || {}), avatar: dataUrl})));
       const handleDashboardBgUpload = (e) => processImage(e.target.files[0], 600, (dataUrl) => setProfileData(p => ({...(p || {}), dashboardBg: dataUrl})));
       const handleItemImageUpload = (e) => processImage(e.target.files[0], 500, (dataUrl) => setNewItem(p => ({...(p || {}), image: dataUrl})));
+      const handleWishImageUpload = (e) => processImage(e.target.files[0], 500, (dataUrl) => setNewWish(p => ({...(p || {}), image: dataUrl})));
 
-      // === 資料庫操作 (雙引擎防護存檔) ===
+      // === 資料庫操作 ===
       const handleSaveProfile = async (e) => {
         e.preventDefault();
         if (!user) return;
         setIsSavingProfile(true);
         try {
           const profileRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('profile').doc('info');
-          // .set 搭配離線持久化，會立即寫入本地，之後慢慢同步雲端
           await profileRef.set(profileData);
           setIsProfileOpen(false);
           showToast('設定已儲存！');
-        } catch (error) { 
-          console.error("儲存設定失敗", error); 
-          showToast('儲存失敗，請重試', 'error');
-        } finally { 
-          setIsSavingProfile(false); 
-        }
+        } catch (error) { showToast('儲存失敗，請重試', 'error'); } finally { setIsSavingProfile(false); }
       };
 
+      // 儲存戰利品
       const handleSaveItem = async (e) => {
         e.preventDefault();
-        if (!newItem.name || !newItem.price) {
-          showToast('請填寫物品名稱與金額！', 'error'); return;
-        }
+        if (!newItem.name || !newItem.price) { showToast('請填寫物品名稱與金額！', 'error'); return; }
         if (!user) return;
         setIsLoading(true);
-
         try {
           const itemsCol = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('stanchases');
-          const dataToSave = {
-            name: newItem.name, price: parseFloat(newItem.price), date: newItem.date, image: newItem.image, category: newItem.category
-          };
-
+          const dataToSave = { name: newItem.name, price: parseFloat(newItem.price), date: newItem.date, image: newItem.image, category: newItem.category };
           if (editingId) {
             await itemsCol.doc(editingId).update(dataToSave);
             showToast('修改已儲存！');
@@ -279,99 +281,107 @@
           }
           closeItemModal();
         } catch (error) { 
-          console.error("儲存失敗:", error); 
-          showToast('儲存發生異常，但已離線備份', 'error');
-          closeItemModal(); // 就算拋出錯誤，仍關閉視窗，因為離線緩存機制已經處理了
-        } finally { 
-          setIsLoading(false); 
-        }
+          showToast('儲存發生異常，已離線備份', 'error'); closeItemModal(); 
+        } finally { setIsLoading(false); }
+      };
+
+      // 儲存許願物品
+      const handleSaveWish = async (e) => {
+        e.preventDefault();
+        if (!newWish.name || !newWish.price) { showToast('請填寫物品名稱與金額！', 'error'); return; }
+        if (!user) return;
+        setIsLoading(true);
+        try {
+          const wishesCol = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('wishes');
+          const dataToSave = { name: newWish.name, price: parseFloat(newWish.price), date: newWish.date, image: newWish.image, category: newWish.category };
+          if (editingWishId) {
+            await wishesCol.doc(editingWishId).update(dataToSave);
+            showToast('許願修改已儲存！');
+          } else {
+            await wishesCol.add({ ...dataToSave, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+            showToast('已加入許願池！');
+          }
+          closeWishModal();
+        } catch (error) { 
+          showToast('儲存發生異常，已離線備份', 'error'); closeWishModal(); 
+        } finally { setIsLoading(false); }
       };
 
       const handleDeleteItem = async (id) => {
         if (!user) return;
         try { 
           await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('stanchases').doc(id).delete();
-          setSwipedItemId(null);
-          showToast('紀錄已刪除');
+          setSwipedItemId(null); showToast('紀錄已刪除');
+        } catch (error) { showToast('刪除失敗', 'error'); }
+      };
+
+      const handleDeleteWish = async (id) => {
+        if (!user) return;
+        try { 
+          await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('wishes').doc(id).delete();
+          setSwipedWishId(null); showToast('已從許願池移除');
         } catch (error) { showToast('刪除失敗', 'error'); }
       };
 
       const handleEditClick = (item) => {
         setEditingId(item.id);
         setNewItem({ name: item.name, price: item.price.toString(), date: item.date, image: item.image, category: item.category || '其他' });
-        setSwipedItemId(null);
-        setIsModalOpen(true);
+        setSwipedItemId(null); setIsModalOpen(true);
       };
 
-      const closeItemModal = () => {
-        setIsModalOpen(false);
-        setEditingId(null);
-        setNewItem({ name: '', price: '', date: todayStr, image: null, category: '小卡' });
+      const handleEditWishClick = (wish) => {
+        setEditingWishId(wish.id);
+        setNewWish({ name: wish.name, price: wish.price.toString(), date: wish.date, image: wish.image, category: wish.category || '其他' });
+        setSwipedWishId(null); setIsWishModalOpen(true);
       };
+
+      const closeItemModal = () => { setIsModalOpen(false); setEditingId(null); setNewItem({ name: '', price: '', date: todayStr, image: null, category: '小卡' }); };
+      const closeWishModal = () => { setIsWishModalOpen(false); setEditingWishId(null); setNewWish({ name: '', price: '', date: todayStr, image: null, category: '小卡' }); };
 
       const handleAddFund = async (e) => {
         e.preventDefault();
-        if (!newFund.amount || !newFund.reason) {
-          showToast('請填寫完整資訊！', 'error'); return;
-        }
+        if (!newFund.amount || !newFund.reason) { showToast('請填寫完整資訊！', 'error'); return; }
         if (!user) return;
         setIsLoading(true);
-
         try {
           const fundsCol = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds');
-          await fundsCol.add({
-            amount: parseFloat(newFund.amount), reason: newFund.reason, date: newFund.date, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-          setIsFundModalOpen(false);
-          setNewFund({ amount: '', reason: '', date: todayStr });
-          showToast('餵食成功！');
-        } catch (error) { 
-          console.error("新增基金失敗:", error); 
-          showToast('儲存發生異常，但已離線備份', 'error');
-          setIsFundModalOpen(false);
-        } finally { 
-          setIsLoading(false); 
-        }
+          await fundsCol.add({ amount: parseFloat(newFund.amount), reason: newFund.reason, date: newFund.date, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+          setIsFundModalOpen(false); setNewFund({ amount: '', reason: '', date: todayStr }); showToast('餵食成功！');
+        } catch (error) { showToast('發生異常', 'error'); setIsFundModalOpen(false); } finally { setIsLoading(false); }
       };
 
       const handleDeleteFund = async (id) => {
         if (!user) return;
-        try { 
-          await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds').doc(id).delete(); 
-          showToast('紀錄已刪除');
-        } catch (error) { showToast('刪除失敗', 'error'); }
+        try { await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds').doc(id).delete(); showToast('紀錄已刪除'); } catch (error) {}
       };
 
       // 手勢控制
       const handleTouchStart = (e) => setTouchStartX(e.touches[0].clientX);
-      const handleTouchMove = (e, id) => {
+      const handleTouchMove = (e, id, type = 'item') => {
         if (!touchStartX) return;
         const diff = touchStartX - e.touches[0].clientX;
-        if (diff > 50) setSwipedItemId(id); 
-        else if (diff < -50 && swipedItemId === id) setSwipedItemId(null);
+        if (type === 'item') {
+            if (diff > 50) setSwipedItemId(id); else if (diff < -50 && swipedItemId === id) setSwipedItemId(null);
+        } else if (type === 'wish') {
+            if (diff > 50) setSwipedWishId(id); else if (diff < -50 && swipedWishId === id) setSwipedWishId(null);
+        }
       };
 
       // 財務計算
       const formatCurrency = (val) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(val || 0);
       const totalFunds = funds.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
       const totalSpent = items.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
+      const totalWishAmount = wishes.reduce((sum, w) => sum + (Number(w.price) || 0), 0); 
       const balance = totalFunds - totalSpent;
       const displayNickname = profileData?.nickname || '專屬用戶';
 
       const filteredItems = activeCategory === '全部' ? items : items.filter(i => (i.category || '其他') === activeCategory);
+      const filteredWishes = activeWishCategory === '全部' ? wishes : wishes.filter(w => (w.category || '其他') === activeWishCategory);
 
       // ==========================================
       // 畫面渲染
       // ==========================================
-      
-      // 載入中畫面
-      if (authLoading) {
-        return (
-          <div className="min-h-screen flex items-center justify-center bg-yellow-50">
-            <i className="fa-solid fa-spinner fa-spin text-yellow-400 text-5xl"></i>
-          </div>
-        );
-      }
+      if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-yellow-50"><i className="fa-solid fa-spinner fa-spin text-yellow-400 text-5xl"></i></div>;
 
       // 未登入狀態
       if (!user) {
@@ -391,33 +401,16 @@
                 <h1 className="text-2xl font-bold text-slate-800">7小時</h1>
                 <p className="text-slate-500 text-sm mt-2">{isLoginMode ? '歡迎回來！我們為你保管著心血紀錄' : '建立專屬雲端帳號，資料永不遺失'}</p>
               </div>
-
               <form onSubmit={handleAuthSubmit} className="space-y-4">
                 {authError && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-xs flex items-center gap-2"><i className="fa-solid fa-circle-exclamation"></i>{authError}</div>}
-                
-                <div className="relative">
-                  <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                  <input type="email" required value={authForm.email} onChange={(e) => setAuthForm({...authForm, email: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="Email" />
-                </div>
-                
-                <div className="relative">
-                  <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                  <input type="password" required value={authForm.password} onChange={(e) => setAuthForm({...authForm, password: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="密碼 (至少6字元)" minLength="6" />
-                </div>
-                
-                {!isLoginMode && (
-                  <div className="relative">
-                    <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                    <input type="password" required value={authForm.confirmPassword} onChange={(e) => setAuthForm({...authForm, confirmPassword: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="確認密碼" minLength="6" />
-                  </div>
-                )}
+                <div className="relative"><i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i><input type="email" required value={authForm.email} onChange={(e) => setAuthForm({...authForm, email: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="Email" /></div>
+                <div className="relative"><i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i><input type="password" required value={authForm.password} onChange={(e) => setAuthForm({...authForm, password: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="密碼 (至少6字元)" minLength="6" /></div>
+                {!isLoginMode && (<div className="relative"><i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i><input type="password" required value={authForm.confirmPassword} onChange={(e) => setAuthForm({...authForm, confirmPassword: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="確認密碼" minLength="6" /></div>)}
                 <button type="submit" disabled={isAuthProcessing} className="w-full bg-yellow-500 text-white font-bold py-3.5 rounded-xl shadow-lg mt-2 transition-transform active:scale-95 flex justify-center items-center gap-2 disabled:bg-yellow-300">
                   {isAuthProcessing ? <i className="fa-solid fa-spinner fa-spin"></i> : <>{isLoginMode ? '登入帳號' : '註冊雲端帳號'} <i className="fa-solid fa-arrow-right"></i></>}
                 </button>
               </form>
-              <button onClick={() => {setIsLoginMode(!isLoginMode); setAuthError('');}} className="w-full text-yellow-500 text-sm font-bold mt-6">
-                {isLoginMode ? '還沒有帳號？去註冊' : '已有帳號？去登入'}
-              </button>
+              <button onClick={() => {setIsLoginMode(!isLoginMode); setAuthError('');}} className="w-full text-yellow-500 text-sm font-bold mt-6">{isLoginMode ? '還沒有帳號？去註冊' : '已有帳號？去登入'}</button>
             </div>
           </div>
         );
@@ -429,8 +422,7 @@
           {/* Toast 提示 */}
           {toastMessage && (
             <div className={`fixed top-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-lg flex items-center gap-2 animate-in slide-in-from-top-4 text-sm ${toastType === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white'}`}>
-              {toastType === 'error' ? <i className="fa-solid fa-circle-exclamation"></i> : <i className="fa-solid fa-circle-check text-green-400"></i>}
-              {toastMessage}
+              {toastType === 'error' ? <i className="fa-solid fa-circle-exclamation"></i> : <i className="fa-solid fa-circle-check text-green-400"></i>}{toastMessage}
             </div>
           )}
 
@@ -450,30 +442,28 @@
               ) : (
                 <div className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-amber-500 z-0"></div>
               )}
+              {(!profileData || !profileData.dashboardBg) && (<div className="absolute -right-8 -top-8 opacity-10 rotate-12 z-0"><i className="fa-solid fa-credit-card text-[180px]"></i></div>)}
               
-              {(!profileData || !profileData.dashboardBg) && (
-                <div className="absolute -right-8 -top-8 opacity-10 rotate-12 z-0"><i className="fa-solid fa-credit-card text-[180px]"></i></div>
-              )}
+              {/* === 修正：絕對定位的按鈕，不佔用版面空間，確保卡片不會變大 === */}
+              <button 
+                onClick={() => setIsWishlistOpen(true)} 
+                className="absolute top-5 left-5 z-20 bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/30 text-white px-3 py-1.5 rounded-full text-xs font-bold tracking-wider inline-flex items-center gap-1.5 transition-all shadow-sm"
+              >
+                <i className="fa-solid fa-star text-yellow-300"></i> 許願池
+              </button>
 
+              {/* === 修正：把剛剛加的 pt-6 拿掉，恢復原本的版面排版 === */}
               <div className="relative z-10 w-full flex flex-col sm:flex-row justify-between items-end gap-6">
                 <div className="space-y-4">
-                  {profileData?.fandom && (
-                    <div className="bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest inline-flex items-center gap-1.5 uppercase">
-                      <i className="fa-solid fa-heart text-[10px]"></i> {profileData.fandom}
-                    </div>
-                  )}
+                  {profileData?.fandom && (<div className="bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest inline-flex items-center gap-1.5 uppercase"><i className="fa-solid fa-heart text-[10px]"></i> {profileData.fandom}</div>)}
                   <div>
                     <h2 className="text-white/80 text-xs font-medium mb-1 flex items-center gap-1.5"><i className="fa-solid fa-wallet"></i> 目前可用預算</h2>
                     <div className="text-4xl sm:text-5xl font-bold tracking-tight">{formatCurrency(balance)}</div>
                   </div>
                 </div>
                 <div className="flex gap-3 w-full sm:w-auto">
-                  <button onClick={() => setIsFundModalOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all">
-                    <i className="fa-solid fa-piggy-bank"></i> 餵食
-                  </button>
-                  <button onClick={() => setIsFundHistoryOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all">
-                    <i className="fa-solid fa-clock-rotate-left"></i> 明細
-                  </button>
+                  <button onClick={() => setIsFundModalOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all"><i className="fa-solid fa-piggy-bank"></i> 餵食</button>
+                  <button onClick={() => setIsFundHistoryOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all"><i className="fa-solid fa-clock-rotate-left"></i> 明細</button>
                 </div>
               </div>
             </div>
@@ -491,8 +481,11 @@
                </div>
             </div>
 
-            {/* 列表內容 */}
+            {/* 列表內容 (展示櫃) */}
             <div className="space-y-4">
+              <div className="flex justify-between items-center px-1">
+                <h3 className="font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-box-open text-yellow-500"></i> 我的展示櫃</h3>
+              </div>
               <div className="flex gap-2 overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
                 {['全部', ...CATEGORIES].map(c => (
                   <button key={c} onClick={() => setActiveCategory(c)} className={`whitespace-nowrap px-6 py-2.5 rounded-full text-sm font-bold transition-all shadow-sm ${activeCategory === c ? 'bg-yellow-500 text-white shadow-yellow-500/20' : 'bg-white text-slate-600 border border-slate-200'}`}>{c}</button>
@@ -513,7 +506,7 @@
                         <button onClick={() => handleEditClick(item)} className="w-1/2 bg-blue-500 text-white flex items-center justify-center"><i className="fa-solid fa-pen-to-square text-lg"></i></button>
                         <button onClick={() => handleDeleteItem(item.id)} className="w-1/2 bg-red-500 text-white flex items-center justify-center"><i className="fa-solid fa-trash-can text-lg"></i></button>
                       </div>
-                      <div className={`relative z-10 bg-white w-full h-full transition-transform duration-300 ${swipedItemId === item.id ? '-translate-x-[120px]' : ''}`} onTouchStart={handleTouchStart} onTouchMove={(e) => handleTouchMove(e, item.id)}>
+                      <div className={`relative z-10 bg-white w-full h-full transition-transform duration-300 ${swipedItemId === item.id ? '-translate-x-[120px]' : ''}`} onTouchStart={handleTouchStart} onTouchMove={(e) => handleTouchMove(e, item.id, 'item')}>
                         <div className="aspect-square bg-slate-50 relative overflow-hidden">
                           {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-200"><i className="fa-solid fa-image text-4xl"></i></div>}
                           <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] font-black text-yellow-600 uppercase">{item.category}</div>
@@ -534,9 +527,13 @@
             <i className="fa-solid fa-plus text-xl"></i>
           </button>
 
+          {/* ======================================= */}
+          {/* 以下為 Modals 彈窗區域            */}
+          {/* ======================================= */}
+
           {/* Modal: 編輯個人資料 */}
           {isProfileOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
               <div className="bg-white rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 overflow-hidden">
                 <div className="p-6 border-b flex justify-between items-center">
                   <h3 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-pen-to-square text-yellow-500"></i> 個人資料設定</h3>
@@ -549,9 +546,7 @@
                       <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-yellow-100 bg-yellow-50 flex items-center justify-center text-yellow-300">
                         {profileData?.avatar ? <img src={profileData.avatar} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-4xl"></i>}
                       </div>
-                      <div className="absolute bottom-0 right-0 bg-yellow-500 w-8 h-8 flex items-center justify-center rounded-full shadow-md text-white border-2 border-white">
-                        <i className="fa-solid fa-camera text-xs"></i>
-                      </div>
+                      <div className="absolute bottom-0 right-0 bg-yellow-500 w-8 h-8 flex items-center justify-center rounded-full shadow-md text-white border-2 border-white"><i className="fa-solid fa-camera text-xs"></i></div>
                     </div>
                   </div>
                   <div className="space-y-4">
@@ -575,7 +570,8 @@
                       </div>
                     </div>
                   </div>
-                  <button onClick={handleSaveProfile} disabled={isSavingProfile} className="w-full bg-yellow-500 text-white py-4 rounded-2xl font-bold shadow-lg mt-4 transition-transform active:scale-95 flex justify-center items-center">
+
+                  <button onClick={handleSaveProfile} disabled={isSavingProfile} className="w-full bg-yellow-500 text-white py-4 rounded-2xl font-bold shadow-lg mt-2 transition-transform active:scale-95 flex justify-center items-center">
                     {isSavingProfile ? <i className="fa-solid fa-spinner fa-spin"></i> : '確認修改'}
                   </button>
                   <button onClick={handleLogout} className="w-full text-slate-400 text-sm font-bold flex items-center justify-center gap-2 py-2 mt-2"><i className="fa-solid fa-right-from-bracket"></i> 登出帳號</button>
@@ -584,9 +580,118 @@
             </div>
           )}
 
-          {/* Modal: 新增/編輯戰利品 */}
+          {/* Modal: 許願池主介面 (全屏或大視窗) */}
+          {isWishlistOpen && (
+            <div className="fixed inset-0 z-[50] bg-slate-50 flex flex-col animate-in slide-in-from-bottom-full overflow-hidden">
+              {/* 許願池頭部 */}
+              <div className="bg-white px-4 py-3 sm:px-6 sm:py-4 shadow-sm border-b flex justify-between items-center sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setIsWishlistOpen(false)} className="bg-slate-100 w-10 h-10 rounded-full flex items-center justify-center hover:bg-slate-200 transition-colors">
+                    <i className="fa-solid fa-arrow-left text-slate-600"></i>
+                  </button>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <i className="fa-solid fa-star text-yellow-400"></i> 許願池
+                  </h2>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-slate-400 font-bold mb-0.5">總需金額</p>
+                  <p className="text-xl sm:text-2xl font-black text-yellow-500 tracking-tight">{formatCurrency(totalWishAmount)}</p>
+                </div>
+              </div>
+
+              {/* 許願池內容區 */}
+              <div className="flex-1 overflow-y-auto p-4 max-w-4xl w-full mx-auto pb-24">
+                <div className="flex gap-2 overflow-x-auto scrollbar-hide mb-6 -mx-4 px-4 sm:mx-0 sm:px-0">
+                  {['全部', ...CATEGORIES].map(c => (
+                    <button key={c} onClick={() => setActiveWishCategory(c)} className={`whitespace-nowrap px-6 py-2.5 rounded-full text-sm font-bold transition-all shadow-sm ${activeWishCategory === c ? 'bg-yellow-500 text-white shadow-yellow-500/20' : 'bg-white text-slate-600 border border-slate-200'}`}>{c}</button>
+                  ))}
+                </div>
+
+                {filteredWishes.length === 0 ? (
+                  <div className="bg-white rounded-3xl p-8 text-center shadow-sm border border-slate-100 flex flex-col items-center justify-center min-h-[40vh]">
+                    <div className="w-20 h-20 bg-yellow-50 rounded-full flex items-center justify-center mb-4"><i className="fa-solid fa-wand-magic-sparkles text-3xl text-yellow-300"></i></div>
+                    <p className="text-slate-600 font-bold text-lg">許願池空空如也！</p>
+                    <p className="text-slate-400 text-sm mt-2 mb-6">有什麼想買的酷東西嗎？趕快加進來吧</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {filteredWishes.map(wish => (
+                      <div key={wish.id} className="relative rounded-2xl overflow-hidden bg-white shadow-sm border border-slate-100 group">
+                        <div className="absolute inset-y-0 right-0 flex w-[120px]">
+                          <button onClick={() => handleEditWishClick(wish)} className="w-1/2 bg-blue-500 text-white flex items-center justify-center"><i className="fa-solid fa-pen-to-square text-lg"></i></button>
+                          <button onClick={() => handleDeleteWish(wish.id)} className="w-1/2 bg-red-500 text-white flex items-center justify-center"><i className="fa-solid fa-trash-can text-lg"></i></button>
+                        </div>
+                        <div className={`relative z-10 bg-white w-full h-full transition-transform duration-300 ${swipedWishId === wish.id ? '-translate-x-[120px]' : ''}`} onTouchStart={handleTouchStart} onTouchMove={(e) => handleTouchMove(e, wish.id, 'wish')}>
+                          <div className="aspect-square bg-slate-50 relative overflow-hidden">
+                            {wish.image ? <img src={wish.image} className="w-full h-full object-cover opacity-80" /> : <div className="w-full h-full flex items-center justify-center text-slate-200 bg-slate-100"><i className="fa-solid fa-gift text-4xl"></i></div>}
+                            <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] font-black text-yellow-600 uppercase">{wish.category}</div>
+                            {/* 加上一個許願的小標記 */}
+                            <div className="absolute bottom-2 right-2 bg-yellow-400/90 backdrop-blur-sm text-white w-6 h-6 rounded-full flex items-center justify-center shadow-sm"><i className="fa-solid fa-star text-[10px]"></i></div>
+                          </div>
+                          <div className="p-3">
+                            <h4 className="font-bold text-slate-800 text-sm line-clamp-1">{wish.name}</h4>
+                            <div className="text-yellow-500 font-black mt-1">{formatCurrency(wish.price)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              {/* 許願池專屬浮動新增按鈕 */}
+              <button onClick={() => { closeWishModal(); setIsWishModalOpen(true); }} className="absolute bottom-6 right-6 z-[60] bg-yellow-400 text-white w-14 h-14 rounded-full shadow-xl flex items-center justify-center border-4 border-white transition-transform active:scale-90">
+                <i className="fa-solid fa-plus text-xl"></i>
+              </button>
+            </div>
+          )}
+
+          {/* Modal: 新增/編輯 許願物品 */}
+          {isWishModalOpen && (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold flex items-center gap-2 text-yellow-500">
+                    <i className={editingWishId ? "fa-solid fa-pen-to-square" : "fa-solid fa-wand-magic-sparkles"}></i> {editingWishId ? '編輯許願' : '加入許願池'}
+                  </h3>
+                  <button type="button" onClick={closeWishModal} disabled={isLoading} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><i className="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                <form onSubmit={handleSaveWish} className="space-y-4">
+                  <div className="h-40 border-2 border-dashed rounded-2xl relative overflow-hidden flex items-center justify-center bg-slate-50 group">
+                    <input type="file" onChange={handleWishImageUpload} className="absolute inset-0 opacity-0 z-10 cursor-pointer" disabled={isLoading} />
+                    {newWish.image ? (
+                      <img src={newWish.image} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-center"><i className="fa-solid fa-image text-3xl text-slate-200 mx-auto"></i><p className="text-xs text-slate-400 mt-2">點擊上傳商品圖</p></div>
+                    )}
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                    {CATEGORIES.map(c => (
+                      <button type="button" key={c} onClick={() => setNewWish({...newWish, category: c})} className={`px-5 py-2 rounded-full text-xs font-bold border transition-all ${newWish.category === c ? 'bg-yellow-500 text-white border-yellow-500 shadow-md shadow-yellow-500/20' : 'bg-white text-slate-500'}`}>{c}</button>
+                    ))}
+                  </div>
+                  <input type="text" required value={newWish.name} onChange={e => setNewWish({...newWish, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="想要什麼酷東西？" disabled={isLoading} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="relative">
+                      <i className="fa-solid fa-dollar-sign absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                      <input type="number" required min="0" value={newWish.price} onChange={e => setNewWish({...newWish, price: e.target.value})} className="w-full p-4 pl-8 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400 font-bold" placeholder="目標金額" disabled={isLoading} />
+                    </div>
+                    <input type="date" value={newWish.date} onChange={e => setNewWish({...newWish, date: e.target.value})} className="w-full p-4 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400 text-sm" disabled={isLoading} />
+                  </div>
+                  <div className="pt-2 flex gap-3">
+                    <button type="button" onClick={closeWishModal} disabled={isLoading} className="flex-1 bg-slate-100 text-slate-500 py-4 rounded-2xl font-bold">取消</button>
+                    <button type="submit" disabled={isLoading} className="flex-[2] bg-yellow-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-yellow-500/20 transition-transform active:scale-95 flex justify-center items-center">
+                      {isLoading ? <i className="fa-solid fa-spinner fa-spin"></i> : '確認許願'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: 新增/編輯 戰利品 */}
           {isModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
               <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-xl font-bold flex items-center gap-2 text-yellow-500">
@@ -629,7 +734,7 @@
 
           {/* Modal: 餵食小金庫 */}
           {isFundModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
               <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-xl font-bold flex items-center gap-2 text-green-600"><i className="fa-solid fa-piggy-bank"></i> 餵食小金庫</h3>
@@ -654,7 +759,7 @@
 
           {/* Modal: 基金明細 */}
           {isFundHistoryOpen && (
-            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/40 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/40 backdrop-blur-sm">
               <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md h-[80vh] flex flex-col p-6 shadow-2xl animate-in slide-in-from-bottom-10 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
                   <div>
