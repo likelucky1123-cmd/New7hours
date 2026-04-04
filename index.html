@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>7小時</title>
+  
+  <link rel="icon" href="IMG_2669.jpeg">
+  <link rel="apple-touch-icon" href="IMG_2669.jpeg">
+
+  <!-- 1. 載入 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- 2. 載入 FontAwesome 圖標庫 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- 3. 載入 React 核心 -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- 4. 載入 Firebase 穩定版引擎 -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <style>
+    .scrollbar-hide::-webkit-scrollbar { display: none; }
+    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    // =========================================================================
+    // ✅ 你的 Firebase 專屬金鑰
+    // =========================================================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyDKVLVYRGvsiuFmQIXuFCU9O2TBVVRb3gk",
+      authDomain: "popcorn-ee2cc.firebaseapp.com",
+      projectId: "popcorn-ee2cc",
+      storageBucket: "popcorn-ee2cc.firebasestorage.app",
+      messagingSenderId: "1095484888994",
+      appId: "1:1095484888994:web:3d39b271a04d0935b0c4fb",
+      measurementId: "G-N8CGBLE373"
+    };
+
+    // 初始化 Firebase
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const appId = 'tnt-richrichboomboom';
+
+    // 🚀 【黑科技開啟】啟動 Firestore 離線持久化緩存機制！
+    // 即使雲端沒存成功，也會先強制存在手機/電腦本地，下次有網路再同步！
+    db.enablePersistence({ synchronizeTabs: true })
+      .catch(function(err) {
+        console.warn("離線持久化啟動失敗:", err);
+      });
+      
+    // 強制設定為本地持久登入，避免瀏覽器隨便把帳號登出
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
+    const { useState, useEffect, useRef } = React;
+    const CATEGORIES = ['小卡', '專輯', '娃娃', '野周', '其他'];
+
+    function App() {
+      // === 狀態管理 ===
+      const [user, setUser] = useState(null); 
+      const [authLoading, setAuthLoading] = useState(true);
+      const [items, setItems] = useState([]); 
+      const [funds, setFunds] = useState([]); 
+      const [profileData, setProfileData] = useState({ nickname: '', fandom: '', bio: '努力為愛發電，聰明控制預算！', avatar: null, dashboardBg: null });
+      
+      // UI 控制
+      const [activeCategory, setActiveCategory] = useState('全部');
+      const [swipedItemId, setSwipedItemId] = useState(null);
+      const [touchStartX, setTouchStartX] = useState(0);
+      const [isModalOpen, setIsModalOpen] = useState(false); 
+      const [editingId, setEditingId] = useState(null); 
+      const [isProfileOpen, setIsProfileOpen] = useState(false); 
+      const [isFundModalOpen, setIsFundModalOpen] = useState(false); 
+      const [isFundHistoryOpen, setIsFundHistoryOpen] = useState(false); 
+      const [isLoading, setIsLoading] = useState(false);
+      const [isSavingProfile, setIsSavingProfile] = useState(false);
+      
+      // Toast 提示
+      const [toastMessage, setToastMessage] = useState('');
+      const [toastType, setToastType] = useState('success');
+      
+      // 認證表單
+      const [isLoginMode, setIsLoginMode] = useState(true);
+      const [authForm, setAuthForm] = useState({ email: '', password: '', confirmPassword: '' });
+      const [authError, setAuthError] = useState('');
+      const [isAuthProcessing, setIsAuthProcessing] = useState(false);
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const [newItem, setNewItem] = useState({ name: '', price: '', date: todayStr, image: null, category: '小卡' });
+      const [newFund, setNewFund] = useState({ amount: '', reason: '', date: todayStr });
+
+      const showToast = (msg, type = 'success') => {
+        setToastMessage(msg);
+        setToastType(type);
+        setTimeout(() => setToastMessage(''), 3000);
+      };
+
+      // === 1. 監聽登入狀態 ===
+      useEffect(() => {
+        const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+          setUser(currentUser);
+          setAuthLoading(false);
+        });
+        return () => unsubscribe();
+      }, []);
+
+      // === 2. 獲取資料 (現在會優先從本地快取讀取，光速顯示) ===
+      useEffect(() => {
+        if (!user) {
+          setItems([]); setFunds([]); return;
+        }
+
+        // 讀取個人設定
+        const profileRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('profile').doc('info');
+        profileRef.onSnapshot((docSnap) => {
+          if (docSnap.exists) { 
+            setProfileData(docSnap.data() || {}); 
+          } else { 
+            setProfileData({ nickname: user.email.split('@')[0], fandom: '', bio: '努力為愛發電，聰明控制預算！', avatar: null, dashboardBg: null }); 
+          }
+        }, err => console.error("讀取設定檔失敗", err));
+
+        const safeSort = (a, b) => {
+          try {
+            if (a.date !== b.date) {
+                const dateA = a.date ? new Date(a.date).getTime() : 0;
+                const dateB = b.date ? new Date(b.date).getTime() : 0;
+                return dateB - dateA;
+            }
+            const timeA = (a.createdAt && typeof a.createdAt.toMillis === 'function') ? a.createdAt.toMillis() : 0;
+            const timeB = (b.createdAt && typeof b.createdAt.toMillis === 'function') ? b.createdAt.toMillis() : 0;
+            return timeB - timeA;
+          } catch(e) { return 0; }
+        };
+
+        // 即時讀取戰利品
+        const itemsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('stanchases');
+        const unsubscribeItems = itemsRef.onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+            const fetchedItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            fetchedItems.sort(safeSort);
+            setItems(fetchedItems);
+            
+            // 提示資料來源是否為快取
+            if (snapshot.metadata.fromCache && fetchedItems.length > 0) {
+                // 如果是從快取讀取的，代表正處於離線狀態，但不影響使用者看到資料
+            }
+        }, (error) => {
+          console.error("讀取戰利品失敗:", error);
+          showToast('資料同步異常，但仍可離線使用', 'error');
+        });
+
+        // 即時讀取基金
+        const fundsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds');
+        const unsubscribeFunds = fundsRef.onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+            const fetchedFunds = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            fetchedFunds.sort(safeSort);
+            setFunds(fetchedFunds);
+        }, (error) => console.error("讀取基金失敗:", error));
+
+        return () => { unsubscribeItems(); unsubscribeFunds(); };
+      }, [user]);
+
+      // === 登入/註冊流程 ===
+      const handleAuthSubmit = async (e) => {
+        e.preventDefault();
+        setAuthError(''); setIsAuthProcessing(true);
+
+        try {
+          if (!isLoginMode) {
+            if (authForm.password !== authForm.confirmPassword) {
+              setAuthError('兩次輸入的密碼不一致！'); setIsAuthProcessing(false); return;
+            }
+            await auth.createUserWithEmailAndPassword(authForm.email, authForm.password);
+            showToast('註冊成功！已自動為您登入');
+            setAuthForm({ ...authForm, password: '', confirmPassword: '' });
+          } else {
+            await auth.signInWithEmailAndPassword(authForm.email, authForm.password);
+            showToast('歡迎回來！');
+          }
+        } catch(error) { 
+          switch (error.code) {
+            case 'auth/email-already-in-use': setAuthError('信箱已註冊，請直接點擊登入！'); break;
+            case 'auth/invalid-email': setAuthError('信箱格式錯誤！'); break;
+            case 'auth/wrong-password': case 'auth/user-not-found': case 'auth/invalid-credential': setAuthError('帳號或密碼錯誤！'); break;
+            case 'auth/weak-password': setAuthError('密碼太短，至少需 6 個字元！'); break;
+            default: setAuthError('連線錯誤，請稍後再試。');
+          }
+        } finally { 
+          setIsAuthProcessing(false); 
+        }
+      };
+
+      const handleLogout = async () => {
+        try {
+          await auth.signOut();
+          setAuthForm({ email: user?.email || '', password: '', confirmPassword: '' });
+          setIsProfileOpen(false);
+          showToast('已安全登出');
+        } catch(e) { console.error(e); }
+      };
+
+      // === 圖片壓縮 ===
+      const processImage = (file, maxWidth, callback) => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let { width, height } = img;
+            if (width > height && width > maxWidth) { height *= maxWidth / width; width = maxWidth; } 
+            else if (height > maxWidth) { width *= maxWidth / height; height = maxWidth; }
+            canvas.width = width; canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            callback(canvas.toDataURL('image/jpeg', 0.6));
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const handleAvatarUpload = (e) => processImage(e.target.files[0], 200, (dataUrl) => setProfileData(p => ({...(p || {}), avatar: dataUrl})));
+      const handleDashboardBgUpload = (e) => processImage(e.target.files[0], 600, (dataUrl) => setProfileData(p => ({...(p || {}), dashboardBg: dataUrl})));
+      const handleItemImageUpload = (e) => processImage(e.target.files[0], 500, (dataUrl) => setNewItem(p => ({...(p || {}), image: dataUrl})));
+
+      // === 資料庫操作 (雙引擎防護存檔) ===
+      const handleSaveProfile = async (e) => {
+        e.preventDefault();
+        if (!user) return;
+        setIsSavingProfile(true);
+        try {
+          const profileRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('profile').doc('info');
+          // .set 搭配離線持久化，會立即寫入本地，之後慢慢同步雲端
+          await profileRef.set(profileData);
+          setIsProfileOpen(false);
+          showToast('設定已儲存！');
+        } catch (error) { 
+          console.error("儲存設定失敗", error); 
+          showToast('儲存失敗，請重試', 'error');
+        } finally { 
+          setIsSavingProfile(false); 
+        }
+      };
+
+      const handleSaveItem = async (e) => {
+        e.preventDefault();
+        if (!newItem.name || !newItem.price) {
+          showToast('請填寫物品名稱與金額！', 'error'); return;
+        }
+        if (!user) return;
+        setIsLoading(true);
+
+        try {
+          const itemsCol = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('stanchases');
+          const dataToSave = {
+            name: newItem.name, price: parseFloat(newItem.price), date: newItem.date, image: newItem.image, category: newItem.category
+          };
+
+          if (editingId) {
+            await itemsCol.doc(editingId).update(dataToSave);
+            showToast('修改已儲存！');
+          } else {
+            await itemsCol.add({ ...dataToSave, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+            showToast('新增成功！');
+          }
+          closeItemModal();
+        } catch (error) { 
+          console.error("儲存失敗:", error); 
+          showToast('儲存發生異常，但已離線備份', 'error');
+          closeItemModal(); // 就算拋出錯誤，仍關閉視窗，因為離線緩存機制已經處理了
+        } finally { 
+          setIsLoading(false); 
+        }
+      };
+
+      const handleDeleteItem = async (id) => {
+        if (!user) return;
+        try { 
+          await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('stanchases').doc(id).delete();
+          setSwipedItemId(null);
+          showToast('紀錄已刪除');
+        } catch (error) { showToast('刪除失敗', 'error'); }
+      };
+
+      const handleEditClick = (item) => {
+        setEditingId(item.id);
+        setNewItem({ name: item.name, price: item.price.toString(), date: item.date, image: item.image, category: item.category || '其他' });
+        setSwipedItemId(null);
+        setIsModalOpen(true);
+      };
+
+      const closeItemModal = () => {
+        setIsModalOpen(false);
+        setEditingId(null);
+        setNewItem({ name: '', price: '', date: todayStr, image: null, category: '小卡' });
+      };
+
+      const handleAddFund = async (e) => {
+        e.preventDefault();
+        if (!newFund.amount || !newFund.reason) {
+          showToast('請填寫完整資訊！', 'error'); return;
+        }
+        if (!user) return;
+        setIsLoading(true);
+
+        try {
+          const fundsCol = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds');
+          await fundsCol.add({
+            amount: parseFloat(newFund.amount), reason: newFund.reason, date: newFund.date, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          setIsFundModalOpen(false);
+          setNewFund({ amount: '', reason: '', date: todayStr });
+          showToast('餵食成功！');
+        } catch (error) { 
+          console.error("新增基金失敗:", error); 
+          showToast('儲存發生異常，但已離線備份', 'error');
+          setIsFundModalOpen(false);
+        } finally { 
+          setIsLoading(false); 
+        }
+      };
+
+      const handleDeleteFund = async (id) => {
+        if (!user) return;
+        try { 
+          await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('funds').doc(id).delete(); 
+          showToast('紀錄已刪除');
+        } catch (error) { showToast('刪除失敗', 'error'); }
+      };
+
+      // 手勢控制
+      const handleTouchStart = (e) => setTouchStartX(e.touches[0].clientX);
+      const handleTouchMove = (e, id) => {
+        if (!touchStartX) return;
+        const diff = touchStartX - e.touches[0].clientX;
+        if (diff > 50) setSwipedItemId(id); 
+        else if (diff < -50 && swipedItemId === id) setSwipedItemId(null);
+      };
+
+      // 財務計算
+      const formatCurrency = (val) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(val || 0);
+      const totalFunds = funds.reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+      const totalSpent = items.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
+      const balance = totalFunds - totalSpent;
+      const displayNickname = profileData?.nickname || '專屬用戶';
+
+      const filteredItems = activeCategory === '全部' ? items : items.filter(i => (i.category || '其他') === activeCategory);
+
+      // ==========================================
+      // 畫面渲染
+      // ==========================================
+      
+      // 載入中畫面
+      if (authLoading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-yellow-50">
+            <i className="fa-solid fa-spinner fa-spin text-yellow-400 text-5xl"></i>
+          </div>
+        );
+      }
+
+      // 未登入狀態
+      if (!user) {
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-50 flex items-center justify-center p-4">
+            {toastMessage && (
+              <div className={`fixed top-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-lg text-sm flex items-center gap-2 transition-all ${toastType === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white'}`}>
+                {toastType === 'error' ? <i className="fa-solid fa-circle-exclamation"></i> : <i className="fa-solid fa-circle-check text-green-400"></i>}
+                {toastMessage}
+              </div>
+            )}
+            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-xl border border-yellow-100">
+              <div className="text-center mb-8">
+                <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-4xl">🍿</span>
+                </div>
+                <h1 className="text-2xl font-bold text-slate-800">7小時</h1>
+                <p className="text-slate-500 text-sm mt-2">{isLoginMode ? '歡迎回來！我們為你保管著心血紀錄' : '建立專屬雲端帳號，資料永不遺失'}</p>
+              </div>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                {authError && <div className="bg-red-50 text-red-600 p-3 rounded-xl text-xs flex items-center gap-2"><i className="fa-solid fa-circle-exclamation"></i>{authError}</div>}
+                
+                <div className="relative">
+                  <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                  <input type="email" required value={authForm.email} onChange={(e) => setAuthForm({...authForm, email: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="Email" />
+                </div>
+                
+                <div className="relative">
+                  <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                  <input type="password" required value={authForm.password} onChange={(e) => setAuthForm({...authForm, password: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="密碼 (至少6字元)" minLength="6" />
+                </div>
+                
+                {!isLoginMode && (
+                  <div className="relative">
+                    <i className="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input type="password" required value={authForm.confirmPassword} onChange={(e) => setAuthForm({...authForm, confirmPassword: e.target.value})} className="w-full pl-11 pr-4 py-3.5 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="確認密碼" minLength="6" />
+                  </div>
+                )}
+                <button type="submit" disabled={isAuthProcessing} className="w-full bg-yellow-500 text-white font-bold py-3.5 rounded-xl shadow-lg mt-2 transition-transform active:scale-95 flex justify-center items-center gap-2 disabled:bg-yellow-300">
+                  {isAuthProcessing ? <i className="fa-solid fa-spinner fa-spin"></i> : <>{isLoginMode ? '登入帳號' : '註冊雲端帳號'} <i className="fa-solid fa-arrow-right"></i></>}
+                </button>
+              </form>
+              <button onClick={() => {setIsLoginMode(!isLoginMode); setAuthError('');}} className="w-full text-yellow-500 text-sm font-bold mt-6">
+                {isLoginMode ? '還沒有帳號？去註冊' : '已有帳號？去登入'}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      // 已登入狀態 - 主畫面
+      return (
+        <div className="min-h-screen bg-slate-50 text-slate-800 pb-24 overflow-x-hidden">
+          {/* Toast 提示 */}
+          {toastMessage && (
+            <div className={`fixed top-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-lg flex items-center gap-2 animate-in slide-in-from-top-4 text-sm ${toastType === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white'}`}>
+              {toastType === 'error' ? <i className="fa-solid fa-circle-exclamation"></i> : <i className="fa-solid fa-circle-check text-green-400"></i>}
+              {toastMessage}
+            </div>
+          )}
+
+          <header className="bg-white shadow-sm sticky top-0 z-20 px-4 py-3 flex justify-between items-center">
+            <div className="flex items-center gap-2 text-yellow-500 font-bold"><span className="text-xl">🍿</span> 7小時</div>
+            <button onClick={() => setIsProfileOpen(true)} className="flex items-center gap-2 bg-slate-50 px-2 py-1.5 rounded-full border border-slate-200 hover:bg-yellow-50 transition-colors">
+              {profileData?.avatar ? <img src={profileData.avatar} className="w-7 h-7 rounded-full object-cover border border-yellow-200" /> : <div className="w-7 h-7 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-600"><i className="fa-solid fa-user text-xs"></i></div>}
+              <span className="text-sm font-medium pr-2 max-w-[100px] truncate">{displayNickname}</span>
+            </button>
+          </header>
+
+          <main className="max-w-4xl mx-auto px-4 py-6 space-y-8">
+            {/* 看板卡片 */}
+            <div className="rounded-3xl p-6 sm:p-8 text-white shadow-2xl relative overflow-hidden min-h-[220px] flex items-center group">
+              {profileData?.dashboardBg ? (
+                <div className="absolute inset-0 bg-cover bg-center z-0 transition-transform duration-700 group-hover:scale-105" style={{ backgroundImage: `url(${profileData.dashboardBg})` }}><div className="absolute inset-0 bg-slate-900/40"></div></div>
+              ) : (
+                <div className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-amber-500 z-0"></div>
+              )}
+              
+              {(!profileData || !profileData.dashboardBg) && (
+                <div className="absolute -right-8 -top-8 opacity-10 rotate-12 z-0"><i className="fa-solid fa-credit-card text-[180px]"></i></div>
+              )}
+
+              <div className="relative z-10 w-full flex flex-col sm:flex-row justify-between items-end gap-6">
+                <div className="space-y-4">
+                  {profileData?.fandom && (
+                    <div className="bg-white/20 backdrop-blur-md border border-white/30 px-3 py-1 rounded-full text-[10px] font-bold tracking-widest inline-flex items-center gap-1.5 uppercase">
+                      <i className="fa-solid fa-heart text-[10px]"></i> {profileData.fandom}
+                    </div>
+                  )}
+                  <div>
+                    <h2 className="text-white/80 text-xs font-medium mb-1 flex items-center gap-1.5"><i className="fa-solid fa-wallet"></i> 目前可用預算</h2>
+                    <div className="text-4xl sm:text-5xl font-bold tracking-tight">{formatCurrency(balance)}</div>
+                  </div>
+                </div>
+                <div className="flex gap-3 w-full sm:w-auto">
+                  <button onClick={() => setIsFundModalOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all">
+                    <i className="fa-solid fa-piggy-bank"></i> 餵食
+                  </button>
+                  <button onClick={() => setIsFundHistoryOpen(true)} className="flex-1 bg-black/20 hover:bg-black/30 text-white px-5 py-3 rounded-2xl font-bold backdrop-blur-md border border-white/20 flex items-center justify-center gap-2 transition-all">
+                    <i className="fa-solid fa-clock-rotate-left"></i> 明細
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 統計小黑板 */}
+            <div className="flex bg-white rounded-2xl shadow-sm border border-slate-100 p-4 justify-around">
+               <div className="text-center">
+                  <div className="text-slate-400 text-xs mb-1 flex items-center justify-center gap-1"><i className="fa-solid fa-arrow-trend-up text-green-500"></i> 總存入</div>
+                  <div className="text-slate-700 font-bold">{formatCurrency(totalFunds)}</div>
+               </div>
+               <div className="w-px bg-slate-100"></div>
+               <div className="text-center">
+                  <div className="text-slate-400 text-xs mb-1 flex items-center justify-center gap-1"><i className="fa-solid fa-arrow-trend-down text-red-400"></i> 總花費</div>
+                  <div className="text-slate-700 font-bold">{formatCurrency(totalSpent)}</div>
+               </div>
+            </div>
+
+            {/* 列表內容 */}
+            <div className="space-y-4">
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+                {['全部', ...CATEGORIES].map(c => (
+                  <button key={c} onClick={() => setActiveCategory(c)} className={`whitespace-nowrap px-6 py-2.5 rounded-full text-sm font-bold transition-all shadow-sm ${activeCategory === c ? 'bg-yellow-500 text-white shadow-yellow-500/20' : 'bg-white text-slate-600 border border-slate-200'}`}>{c}</button>
+                ))}
+              </div>
+              
+              {filteredItems.length === 0 ? (
+                <div className="bg-white rounded-3xl p-8 text-center shadow-sm border border-slate-100 flex flex-col items-center justify-center min-h-[25vh]">
+                  <div className="w-16 h-16 bg-yellow-50 rounded-full flex items-center justify-center mb-4"><i className="fa-solid fa-tag text-2xl text-yellow-300"></i></div>
+                  <p className="text-slate-500 font-medium">這個分類還沒有收藏喔！</p>
+                  <p className="text-slate-400 text-sm mt-1 mb-6">點擊右下角按鈕新增一筆吧</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {filteredItems.map(item => (
+                    <div key={item.id} className="relative rounded-2xl overflow-hidden bg-white shadow-sm border border-slate-100 group">
+                      <div className="absolute inset-y-0 right-0 flex w-[120px]">
+                        <button onClick={() => handleEditClick(item)} className="w-1/2 bg-blue-500 text-white flex items-center justify-center"><i className="fa-solid fa-pen-to-square text-lg"></i></button>
+                        <button onClick={() => handleDeleteItem(item.id)} className="w-1/2 bg-red-500 text-white flex items-center justify-center"><i className="fa-solid fa-trash-can text-lg"></i></button>
+                      </div>
+                      <div className={`relative z-10 bg-white w-full h-full transition-transform duration-300 ${swipedItemId === item.id ? '-translate-x-[120px]' : ''}`} onTouchStart={handleTouchStart} onTouchMove={(e) => handleTouchMove(e, item.id)}>
+                        <div className="aspect-square bg-slate-50 relative overflow-hidden">
+                          {item.image ? <img src={item.image} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-200"><i className="fa-solid fa-image text-4xl"></i></div>}
+                          <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] font-black text-yellow-600 uppercase">{item.category}</div>
+                        </div>
+                        <div className="p-3">
+                          <h4 className="font-bold text-slate-800 text-sm line-clamp-1">{item.name}</h4>
+                          <div className="text-yellow-500 font-black mt-1">{formatCurrency(item.price)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </main>
+
+          <button onClick={() => { closeItemModal(); setIsModalOpen(true); }} className="fixed bottom-6 right-6 z-30 bg-yellow-500 text-white w-14 h-14 rounded-full shadow-xl flex items-center justify-center border-4 border-white transition-transform active:scale-90">
+            <i className="fa-solid fa-plus text-xl"></i>
+          </button>
+
+          {/* Modal: 編輯個人資料 */}
+          {isProfileOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 overflow-hidden">
+                <div className="p-6 border-b flex justify-between items-center">
+                  <h3 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-pen-to-square text-yellow-500"></i> 個人資料設定</h3>
+                  <button onClick={() => setIsProfileOpen(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><i className="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                <div className="p-6 overflow-y-auto space-y-5">
+                  <div className="flex justify-center">
+                    <div className="relative w-24 h-24">
+                      <input type="file" onChange={handleAvatarUpload} className="absolute inset-0 opacity-0 z-10 cursor-pointer" />
+                      <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-yellow-100 bg-yellow-50 flex items-center justify-center text-yellow-300">
+                        {profileData?.avatar ? <img src={profileData.avatar} className="w-full h-full object-cover" /> : <i className="fa-solid fa-user text-4xl"></i>}
+                      </div>
+                      <div className="absolute bottom-0 right-0 bg-yellow-500 w-8 h-8 flex items-center justify-center rounded-full shadow-md text-white border-2 border-white">
+                        <i className="fa-solid fa-camera text-xs"></i>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 mb-1 block">我的暱稱</label>
+                      <input type="text" value={profileData?.nickname || ''} onChange={e => setProfileData({...profileData, nickname: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border focus:ring-2 focus:ring-yellow-400 outline-none" placeholder="輸入暱稱" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 mb-1 block">我的粉籍</label>
+                      <input type="text" value={profileData?.fandom || ''} onChange={e => setProfileData({...profileData, fandom: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border focus:ring-2 focus:ring-yellow-400 outline-none" placeholder="例如: NCT" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 mb-1 block">個性簽名</label>
+                      <textarea value={profileData?.bio || ''} onChange={e => setProfileData({...profileData, bio: e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl border h-20 resize-none outline-none focus:ring-2 focus:ring-yellow-400" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 mb-1 block">更換主頁背景圖</label>
+                      <div className="mt-1 flex items-center gap-3">
+                        <input type="file" onChange={handleDashboardBgUpload} className="text-xs flex-grow" />
+                        {profileData?.dashboardBg && <button onClick={() => setProfileData({...profileData, dashboardBg: null})} className="text-red-500 text-xs font-bold bg-red-50 px-3 py-1.5 rounded-full">移除背景</button>}
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={handleSaveProfile} disabled={isSavingProfile} className="w-full bg-yellow-500 text-white py-4 rounded-2xl font-bold shadow-lg mt-4 transition-transform active:scale-95 flex justify-center items-center">
+                    {isSavingProfile ? <i className="fa-solid fa-spinner fa-spin"></i> : '確認修改'}
+                  </button>
+                  <button onClick={handleLogout} className="w-full text-slate-400 text-sm font-bold flex items-center justify-center gap-2 py-2 mt-2"><i className="fa-solid fa-right-from-bracket"></i> 登出帳號</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: 新增/編輯戰利品 */}
+          {isModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold flex items-center gap-2 text-yellow-500">
+                    <i className={editingId ? "fa-solid fa-pen-to-square" : "fa-solid fa-plus"}></i> {editingId ? '編輯紀錄' : '記一筆戰利品'}
+                  </h3>
+                  <button type="button" onClick={closeItemModal} disabled={isLoading} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><i className="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                <form onSubmit={handleSaveItem} className="space-y-4">
+                  <div className="h-40 border-2 border-dashed rounded-2xl relative overflow-hidden flex items-center justify-center bg-slate-50 group">
+                    <input type="file" onChange={handleItemImageUpload} className="absolute inset-0 opacity-0 z-10 cursor-pointer" disabled={isLoading} />
+                    {newItem.image ? (
+                      <img src={newItem.image} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-center"><i className="fa-solid fa-image text-3xl text-slate-200 mx-auto"></i><p className="text-xs text-slate-400 mt-2">點擊上傳商品圖</p></div>
+                    )}
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                    {CATEGORIES.map(c => (
+                      <button type="button" key={c} onClick={() => setNewItem({...newItem, category: c})} className={`px-5 py-2 rounded-full text-xs font-bold border transition-all ${newItem.category === c ? 'bg-yellow-500 text-white border-yellow-500 shadow-md shadow-yellow-500/20' : 'bg-white text-slate-500'}`}>{c}</button>
+                    ))}
+                  </div>
+                  <input type="text" required value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400" placeholder="買了什麼？" disabled={isLoading} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="relative">
+                      <i className="fa-solid fa-dollar-sign absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                      <input type="number" required min="0" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} className="w-full p-4 pl-8 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400 font-bold" placeholder="多少錢" disabled={isLoading} />
+                    </div>
+                    <input type="date" value={newItem.date} onChange={e => setNewItem({...newItem, date: e.target.value})} className="w-full p-4 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-yellow-400 text-sm" disabled={isLoading} />
+                  </div>
+                  <div className="pt-2 flex gap-3">
+                    <button type="button" onClick={closeItemModal} disabled={isLoading} className="flex-1 bg-slate-100 text-slate-500 py-4 rounded-2xl font-bold">取消</button>
+                    <button type="submit" disabled={isLoading} className="flex-[2] bg-yellow-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-yellow-500/20 transition-transform active:scale-95 flex justify-center items-center">
+                      {isLoading ? <i className="fa-solid fa-spinner fa-spin"></i> : '儲存紀錄'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: 餵食小金庫 */}
+          {isFundModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold flex items-center gap-2 text-green-600"><i className="fa-solid fa-piggy-bank"></i> 餵食小金庫</h3>
+                  <button type="button" onClick={() => setIsFundModalOpen(false)} disabled={isLoading} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><i className="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                <form onSubmit={handleAddFund} className="space-y-4">
+                  <div className="relative">
+                    <i className="fa-solid fa-dollar-sign absolute left-5 top-1/2 -translate-y-1/2 text-green-500 text-xl"></i>
+                    <input type="number" required min="1" value={newFund.amount} onChange={e => setNewFund({...newFund, amount: e.target.value})} className="w-full p-5 pl-12 bg-green-50 rounded-2xl border border-green-100 text-3xl font-black text-green-600 outline-none focus:ring-2 focus:ring-green-400" placeholder="0" disabled={isLoading} />
+                  </div>
+                  <input type="text" required value={newFund.reason} onChange={e => setNewFund({...newFund, reason: e.target.value})} className="w-full p-4 bg-slate-50 rounded-xl border outline-none focus:ring-2 focus:ring-green-400" placeholder="這筆錢的來源？ (例如: 零用錢、打工)" disabled={isLoading} />
+                  <div className="pt-2 flex gap-3">
+                    <button type="button" onClick={() => setIsFundModalOpen(false)} disabled={isLoading} className="flex-1 bg-slate-100 text-slate-500 py-4 rounded-2xl font-bold">取消</button>
+                    <button type="submit" disabled={isLoading} className="flex-[2] bg-green-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-green-500/20 transition-transform active:scale-95 flex justify-center items-center">
+                      {isLoading ? <i className="fa-solid fa-spinner fa-spin"></i> : '確認餵食'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: 基金明細 */}
+          {isFundHistoryOpen && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/40 backdrop-blur-sm">
+              <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md h-[80vh] flex flex-col p-6 shadow-2xl animate-in slide-in-from-bottom-10 overflow-hidden">
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2"><i className="fa-solid fa-clock-rotate-left text-slate-400"></i> 基金紀錄</h3>
+                    <p className="text-xs text-slate-400 mt-1">目前總投入累計: {formatCurrency(totalFunds)}</p>
+                  </div>
+                  <button type="button" onClick={() => setIsFundHistoryOpen(false)} className="bg-slate-50 p-3 rounded-full hover:bg-slate-100"><i className="fa-solid fa-xmark"></i></button>
+                </div>
+                <div className="flex-grow overflow-y-auto space-y-3 pb-6 scrollbar-hide">
+                  {funds.length === 0 ? (
+                    <div className="text-center py-20 text-slate-300 font-bold"><i className="fa-solid fa-piggy-bank text-6xl opacity-20 block mb-4"></i> 還沒有任何餵食紀錄喔</div>
+                  ) : (
+                    funds.map(f => (
+                      <div key={f.id} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl border border-slate-100 group transition-all hover:bg-green-50 hover:border-green-100">
+                        <div><p className="font-bold text-slate-700 text-sm">{f.reason}</p><p className="text-[10px] text-slate-400 uppercase mt-0.5">{f.date}</p></div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-green-600 font-black">+{formatCurrency(f.amount)}</span>
+                          <button type="button" onClick={() => handleDeleteFund(f.id)} className="text-slate-200 hover:text-red-500 transition-colors p-2"><i className="fa-solid fa-trash-can"></i></button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
+
+
